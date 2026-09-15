@@ -46,24 +46,57 @@ app.use((req, res, next) => {
 
 // 2. CORS
 const sanitizeOrigin = (value) => value.trim().replace(/\/+$/, '');
-const allowedOrigins = (process.env.CORS_ORIGINS || '')
+
+// ✅ ĐÃ SỬA: Thêm fallback mặc định cho localhost:5173 và Vercel
+const DEFAULT_CORS_ORIGINS = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://127.0.0.1:5173',
+  'https://dash-board.vercel.app',
+];
+
+const envOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
   .map((o) => o.trim())
   .filter(Boolean)
   .map(sanitizeOrigin);
 
+const allowedOrigins = envOrigins.length > 0
+  ? envOrigins
+  : DEFAULT_CORS_ORIGINS.map(sanitizeOrigin);
+
+console.log('[CORS] Allowed origins:', allowedOrigins);
+
 app.use(cors({
   origin: (origin, callback) => {
+    // Cho phép request không có origin (Postman, curl, server-to-server)
     if (!origin) return callback(null, true);
+
     const normalized = sanitizeOrigin(origin);
+
+    // Cho phép mọi origin khi dev
     if (!IS_PROD_LIKE && allowedOrigins.length === 0) return callback(null, true);
+
+    // Cho phép nếu origin nằm trong danh sách
     if (allowedOrigins.includes(normalized)) return callback(null, true);
+
+    // Cho phép mọi subdomain *.vercel.app (tiện cho preview deploy)
+    if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(normalized)) {
+      return callback(null, true);
+    }
+
+    console.warn('[CORS] Blocked origin:', normalized);
     return callback(null, false);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Authorization', 'Content-Type', 'X-CSRF-Token', 'X-Requested-With'],
+  exposedHeaders: ['Authorization'],
+  maxAge: 86400,
 }));
+
+// Xử lý preflight OPTIONS cho mọi route
+app.options('*', cors());
 
 // 3. Body parser
 app.use(express.json({ limit: process.env.JSON_LIMIT || '256kb' }));
@@ -243,7 +276,17 @@ app.use(require('./routes/works.routes')(context));
 app.use(require('./routes/taskPlans.routes')(context));
 app.use(require('./routes/attachments.routes')(context));
 
-// Dev-only health check
+// Health check (luôn bật để test nhanh)
+app.get('/api/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    env: NODE_ENV,
+    time: new Date().toISOString(),
+    cors: allowedOrigins,
+  });
+});
+
+// Dev-only test DB
 if (!IS_PROD_LIKE) {
   app.get('/api/auth/test', async (_req, res) => {
     try {
@@ -263,16 +306,14 @@ app.use((error, _req, res, _next) => {
   return handleServerError(res, error, 'unhandled-middleware');
 });
 
-
 const path = require('path');
 
 // Route xử lý riêng để mở/tải file từ thư mục uploads an toàn
 app.get('/uploads/:folder/:filename', (req, res) => {
   try {
     const { folder, filename } = req.params;
-    // Đường dẫn tuyệt đối trỏ đến thư mục chứa file
     const filePath = path.join(__dirname, '../uploads', folder, filename);
-    
+
     res.sendFile(filePath, (err) => {
       if (err) {
         return res.status(404).json({ message: 'Không tìm thấy file trên server' });
