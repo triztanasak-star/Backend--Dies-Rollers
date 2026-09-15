@@ -47,7 +47,7 @@ app.use((req, res, next) => {
 // 2. CORS
 const sanitizeOrigin = (value) => value.trim().replace(/\/+$/, '');
 
-// ✅ ĐÃ SỬA: Thêm fallback mặc định cho localhost:5173 và Vercel
+// ✅ Fallback mặc định cho localhost và Vercel
 const DEFAULT_CORS_ORIGINS = [
   'http://localhost:5173',
   'http://localhost:3000',
@@ -69,18 +69,14 @@ console.log('[CORS] Allowed origins:', allowedOrigins);
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Cho phép request không có origin (Postman, curl, server-to-server)
     if (!origin) return callback(null, true);
 
     const normalized = sanitizeOrigin(origin);
 
-    // Cho phép mọi origin khi dev
     if (!IS_PROD_LIKE && allowedOrigins.length === 0) return callback(null, true);
 
-    // Cho phép nếu origin nằm trong danh sách
     if (allowedOrigins.includes(normalized)) return callback(null, true);
 
-    // Cho phép mọi subdomain *.vercel.app (tiện cho preview deploy)
     if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(normalized)) {
       return callback(null, true);
     }
@@ -95,8 +91,8 @@ app.use(cors({
   maxAge: 86400,
 }));
 
-// Xử lý preflight OPTIONS cho mọi route
-app.options('*', cors());
+// ✅ ĐÃ SỬA: Express 5.x dùng '/*splat' thay vì '*'
+app.options('/*splat', cors());
 
 // 3. Body parser
 app.use(express.json({ limit: process.env.JSON_LIMIT || '256kb' }));
@@ -276,7 +272,7 @@ app.use(require('./routes/works.routes')(context));
 app.use(require('./routes/taskPlans.routes')(context));
 app.use(require('./routes/attachments.routes')(context));
 
-// Health check (luôn bật để test nhanh)
+// Health check
 app.get('/api/health', (_req, res) => {
   res.json({
     status: 'ok',
