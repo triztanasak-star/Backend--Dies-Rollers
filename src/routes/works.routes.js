@@ -53,10 +53,12 @@ module.exports = (context) => {
   `;
 
   // Kiểm tra quyền: Chỉ Admin/Manager HOẶC PIC (assigned_to), người hỗ trợ (support_id)
+  // Đã fix lỗi 403 bằng cách ép kiểu Number cho cả 2 vế so sánh
   const canModifyWork = (req, work) => {
+    const userId = Number(req.user.id);
     return isManagerOrAdmin(req) ||
-      work.assigned_to === req.user.id ||
-      work.support_id === req.user.id;
+      (work.assigned_to !== null && Number(work.assigned_to) === userId) ||
+      (work.support_id !== null && Number(work.support_id) === userId);
   };
 
   // List - Tất cả các role đều lấy toàn bộ danh sách dùng chung
@@ -150,7 +152,7 @@ module.exports = (context) => {
     }
   });
 
-  // Sửa thông tin task (Chỉ Admin/Manager hoặc assigned_to / support_id)
+  // Sửa thông tin task
   router.put('/api/works/:id', authMiddleware, async (req, res) => {
     try {
       const id = Number(req.params.id);
@@ -216,7 +218,7 @@ module.exports = (context) => {
     }
   });
 
-  // Cập nhật tiến độ (Chỉ Admin/Manager hoặc assigned_to / support_id)
+  // Cập nhật tiến độ
   router.patch('/api/works/:id/progress', authMiddleware, async (req, res) => {
     try {
       const id = Number(req.params.id);
