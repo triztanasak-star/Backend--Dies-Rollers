@@ -31,9 +31,10 @@ module.exports = (context) => {
     const work = rows[0];
     
     if (requireModify) {
+      // Đã ép kiểu Number() để so sánh chính xác giữa DB (Integer) và Token (String)
       const isAllowed = isManagerOrAdmin(req) || 
-                        work.assigned_to === req.user.id || 
-                        work.support_id === req.user.id;
+                        Number(work.assigned_to) === Number(req.user.id) || 
+                        Number(work.support_id) === Number(req.user.id);
       if (!isAllowed) {
         return { ok: false, status: 403, message: 'Bạn không có quyền chỉnh sửa hạng mục của công việc này' };
       }
