@@ -140,8 +140,18 @@ const logActivity = async (req, action, targetId = null, oldValues = null, newVa
 
 // --- Auth middleware & permission helpers ---
 
+// ✅ ĐÃ SỬA: Đọc token từ header HOẶC cookie
 const authMiddleware = async (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
+  // Đọc token từ header Authorization
+  let token = req.headers.authorization?.split(' ')[1];
+
+  // Nếu không có header, đọc từ cookie
+  if (!token) {
+    token = req.cookies?.dw_access_token
+         || req.cookies?.access_token
+         || req.cookies?.token;
+  }
+
   if (!token) return res.status(401).json({ message: 'No token provided' });
 
   try {
