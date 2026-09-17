@@ -110,7 +110,7 @@ module.exports = (context) => {
       const whereClause = `WHERE ${filters.join(' AND ')}`;
       const countQuery = `SELECT COUNT(*)::int AS total FROM "digital_works" dw ${whereClause}`;
       const rowsQuery = `${worksQueryBase} ${whereClause}
-        ORDER BY dw.id DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+        ORDER BY dw.id ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
 
       const [countResult, rowsResult] = await Promise.all([
         db.query(countQuery, params),
