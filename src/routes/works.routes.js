@@ -52,13 +52,38 @@ module.exports = (context) => {
     LEFT JOIN "users" support ON support.id = dw.support_id
   `;
 
-  // Kiểm tra quyền: Chỉ Admin/Manager HOẶC PIC (assigned_to), người hỗ trợ (support_id)
-  // Đã fix lỗi 403 bằng cách ép kiểu Number cho cả 2 vế so sánh
+  // Kiểm tra quyền: Admin/Manager HOẶC PIC (assigned_to) HOẶC Support (support_id)
   const canModifyWork = (req, work) => {
     const userId = Number(req.user.id);
     return isManagerOrAdmin(req) ||
       (work.assigned_to !== null && Number(work.assigned_to) === userId) ||
       (work.support_id !== null && Number(work.support_id) === userId);
+  };
+
+  // ✅ HÀM MỚI: Tự động convert tên → ID
+  const resolveUserId = async (idOrName, fallbackName) => {
+    // Nếu đã là số hợp lệ → dùng luôn
+    if (idOrName !== undefined && idOrName !== null && idOrName !== '') {
+      const num = Number(idOrName);
+      if (!isNaN(num) && num > 0) return num;
+    }
+    // Nếu là tên → lookup ID
+    const searchValue = idOrName || fallbackName;
+    if (!searchValue || typeof searchValue !== 'string') return null;
+
+    try {
+      const { rows } = await db.query(
+        'SELECT id FROM "users" WHERE name = $1 OR email = $1 LIMIT 1',
+        [searchValue.trim()]
+      );
+      if (rows.length) {
+        console.log(`[AUTO-CONVERT] "${searchValue}" → user_id=${rows[0].id}`);
+        return rows[0].id;
+      }
+    } catch (err) {
+      console.error('[AUTO-CONVERT] Lỗi lookup:', err);
+    }
+    return null;
   };
 
   // List - Tất cả các role đều lấy toàn bộ danh sách dùng chung
@@ -115,31 +140,54 @@ module.exports = (context) => {
     }
   });
 
-  // Tạo công việc mới
+  // Tạo công việc mới - ✅ CÓ AUTO-CONVERT
   router.post('/api/works', authMiddleware, async (req, res) => {
     try {
       const {
-        task_name, description, factory_name, expected_deadline, desired_deadline,
+        task_name, description, factory_name, expected_deadline, desired_deadline, priority,
+        project_id, lead_project, assistant,
       } = req.body;
+
       const isReviewer = isManagerOrAdmin(req);
-      const { project_id, assigned_to, support_id, priority } = isReviewer
-        ? req.body
-        : { project_id: null, assigned_to: null, support_id: null, priority: null };
 
       if (!task_name) return res.status(400).json({ message: 'Missing task_name' });
       if (priority && !['high', 'medium', 'low'].includes(priority)) {
         return res.status(400).json({ message: 'Invalid priority' });
       }
 
+      // ✅ AUTO-CONVERT: chấp nhận cả ID và tên
+      let nextProjectID = isReviewer ? (project_id || null) : null;
+      let nextAssignedTo = null;
+      let nextSupportId = null;
+
+      if (isReviewer) {
+        nextAssignedTo = await resolveUserId(req.body.assigned_to, lead_project);
+        nextSupportId = await resolveUserId(req.body.support_id, assistant);
+      }
+
+      console.log('[POST /api/works] Input:', {
+        assigned_to: req.body.assigned_to,
+        lead_project,
+        support_id: req.body.support_id,
+        assistant,
+      });
+      console.log('[POST /api/works] Resolved:', {
+        assigned_to: nextAssignedTo,
+        support_id: nextSupportId,
+      });
+
       const { rows } = await db.query(
         `INSERT INTO "digital_works"
            (task_name, description, factory_name, project_id, assigned_to, support_id, created_by,
-            expected_deadline, desired_deadline, priority)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, 'medium'))
+            expected_deadline, desired_deadline, priority, lead_project, assistant)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, 'medium'), $11, $12)
          RETURNING *`,
-        [task_name, description || null, factory_name || null, project_id || null,
-          assigned_to || null, support_id || null, req.user.id, expected_deadline || null,
-          desired_deadline || null, priority || null],
+        [
+          task_name, description || null, factory_name || null,
+          nextProjectID, nextAssignedTo, nextSupportId, req.user.id,
+          expected_deadline || null, desired_deadline || null, priority || null,
+          lead_project || null, assistant || null,
+        ],
       );
 
       await logActivity(req, 'CREATE_WORK', rows[0].id, null, rows[0]);
@@ -152,7 +200,7 @@ module.exports = (context) => {
     }
   });
 
-  // Sửa thông tin task
+  // Sửa thông tin task - ✅ CÓ AUTO-CONVERT
   router.put('/api/works/:id', authMiddleware, async (req, res) => {
     try {
       const id = Number(req.params.id);
@@ -166,7 +214,7 @@ module.exports = (context) => {
       }
 
       const {
-        task_name, description, factory_name, project_id, assigned_to, support_id,
+        task_name, description, factory_name, project_id,
         lead_project, assistant,
         expected_deadline, desired_deadline, priority,
         capex_amount, estimated_saving_per_year, payback_years,
@@ -177,9 +225,34 @@ module.exports = (context) => {
       }
 
       const isReviewer = isManagerOrAdmin(req);
-      const nextProjectID = isReviewer ? (project_id !== undefined ? project_id : work.project_id) : work.project_id;
-      const nextAssignedTo = isReviewer ? (assigned_to !== undefined ? assigned_to : work.assigned_to) : work.assigned_to;
-      const nextSupportId = isReviewer ? (support_id !== undefined ? support_id : work.support_id) : work.support_id;
+
+      // ✅ AUTO-CONVERT: chấp nhận cả ID và tên
+      let nextAssignedTo = work.assigned_to;
+      let nextSupportId = work.support_id;
+
+      if (isReviewer) {
+        if (req.body.assigned_to !== undefined || lead_project !== undefined) {
+          nextAssignedTo = await resolveUserId(req.body.assigned_to, lead_project);
+        }
+        if (req.body.support_id !== undefined || assistant !== undefined) {
+          nextSupportId = await resolveUserId(req.body.support_id, assistant);
+        }
+      }
+
+      const nextProjectID = isReviewer
+        ? (project_id !== undefined ? project_id : work.project_id)
+        : work.project_id;
+
+      console.log('[PUT /api/works] Input:', {
+        assigned_to: req.body.assigned_to,
+        lead_project,
+        support_id: req.body.support_id,
+        assistant,
+      });
+      console.log('[PUT /api/works] Resolved:', {
+        assigned_to: nextAssignedTo,
+        support_id: nextSupportId,
+      });
 
       const { rows } = await db.query(
         `UPDATE "digital_works"
@@ -269,7 +342,7 @@ module.exports = (context) => {
          RETURNING *`,
         [
           status, progress_percent, progress_comment, nextManagerComment, nextRating,
-          nextHasFeedback, nextFeedbackComment, 
+          nextHasFeedback, nextFeedbackComment,
           capex_amount, estimated_saving_per_year, payback_years,
           completedAt, id
         ],
