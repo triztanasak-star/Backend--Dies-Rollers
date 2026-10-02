@@ -48,7 +48,6 @@ app.use((req, res, next) => {
 // 2. CORS
 const sanitizeOrigin = (value) => value.trim().replace(/\/+$/, '');
 
-// ✅ Fallback mặc định cho localhost và Vercel
 const DEFAULT_CORS_ORIGINS = [
   'http://localhost:5173',
   'http://localhost:3000',
@@ -92,7 +91,6 @@ app.use(cors({
   maxAge: 86400,
 }));
 
-// ✅ ĐÃ SỬA: Express 5.x dùng '/*splat' thay vì '*'
 app.options('/*splat', cors());
 
 // 3. Body parser
@@ -141,12 +139,9 @@ const logActivity = async (req, action, targetId = null, oldValues = null, newVa
 
 // --- Auth middleware & permission helpers ---
 
-// ✅ ĐÃ SỬA: Đọc token từ header HOẶC cookie
 const authMiddleware = async (req, res, next) => {
-  // Đọc token từ header Authorization
   let token = req.headers.authorization?.split(' ')[1];
 
-  // Nếu không có header, đọc từ cookie
   if (!token) {
     token = req.cookies?.dw_access_token
          || req.cookies?.access_token
@@ -293,6 +288,79 @@ app.get('/api/health', (_req, res) => {
     cors: allowedOrigins,
   });
 });
+
+// ============================================================
+// DEBUG ENDPOINTS - TẠM THỜI, XÓA SAU KHI FIX XONG
+// ============================================================
+
+// Kiểm tra biến môi trường TEAMS_WEBHOOK_URL có nạp không
+app.get('/api/debug-env', (req, res) => {
+  const url = process.env.TEAMS_WEBHOOK_URL || '';
+  const smtpHost = process.env.SMTP_HOST || '';
+  const smtpUser = process.env.SMTP_USER || '';
+
+  res.json({
+    nodeEnv: NODE_ENV,
+    teams: {
+      hasUrl: !!url,
+      length: url.length,
+      firstChars: url.substring(0, 60),
+      lastChars: url.substring(url.length - 30),
+      hasPathsKeyword: url.includes('/paths/invoke'),
+    },
+    smtp: {
+      hasHost: !!smtpHost,
+      host: smtpHost,
+      hasUser: !!smtpUser,
+      user: smtpUser,
+    },
+    managerEmails: process.env.MANAGER_NOTIFY_EMAILS || '(chưa set)',
+  });
+});
+
+// Test gửi webhook Teams từ chính Render
+app.get('/api/test-teams', async (req, res) => {
+  const url = process.env.TEAMS_WEBHOOK_URL;
+  if (!url) {
+    return res.status(500).json({ error: 'TEAMS_WEBHOOK_URL is undefined' });
+  }
+
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'Test từ Render - Digital Work' }),
+    });
+    const body = await r.text();
+    res.json({
+      status: r.status,
+      ok: r.ok,
+      body: body.substring(0, 500),
+    });
+  } catch (e) {
+    res.status(500).json({
+      error: e.message,
+      stack: e.stack?.substring(0, 500),
+    });
+  }
+});
+
+// Test gửi email qua SMTP
+app.get('/api/test-email', async (req, res) => {
+  try {
+    const result = await notificationService.sendTestEmail();
+    res.json({ ok: true, result });
+  } catch (e) {
+    res.status(500).json({
+      error: e.message,
+      stack: e.stack?.substring(0, 500),
+    });
+  }
+});
+
+// ============================================================
+// END DEBUG ENDPOINTS
+// ============================================================
 
 // Dev-only test DB
 if (!IS_PROD_LIKE) {
