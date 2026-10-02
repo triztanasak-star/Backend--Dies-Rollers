@@ -4,6 +4,7 @@ module.exports = (context) => {
   const router = express.Router();
   const {
     db,
+    notificationService,
     authMiddleware,
     requireManagerOrAdmin,
     isManagerOrAdmin,
@@ -19,6 +20,7 @@ module.exports = (context) => {
     description: row.description,
     factory_name: row.factory_name,
     status: row.status,
+    workflow_status: row.workflow_status,
     priority: row.priority,
     progress_percent: row.progress_percent,
     expected_deadline: row.expected_deadline,
@@ -26,6 +28,9 @@ module.exports = (context) => {
     completed_at: row.completed_at,
     lead_project: row.lead_project,
     assistant: row.assistant,
+    representative_name: row.representative_name,
+    representative_email: row.representative_email,
+    representative_phone: row.representative_phone,
     project_id: row.project_id,
     assigned_to: row.assigned_to,
     assigned_to_name: row.assigned_to_name ?? null,
@@ -38,6 +43,7 @@ module.exports = (context) => {
     payback_years: row.payback_years !== null && row.payback_years !== undefined ? Number(row.payback_years) : null,
     manager_comment: row.manager_comment,
     progress_comment: row.progress_comment,
+    support_request: row.support_request,
     has_feedback: row.has_feedback,
     feedback_comment: row.feedback_comment,
     rating: row.rating,
@@ -146,6 +152,7 @@ module.exports = (context) => {
       const {
         task_name, description, factory_name, expected_deadline, desired_deadline, priority,
         project_id, lead_project, assistant,
+        representative_name, representative_email, representative_phone,
       } = req.body;
 
       const isReviewer = isManagerOrAdmin(req);
@@ -179,18 +186,28 @@ module.exports = (context) => {
       const { rows } = await db.query(
         `INSERT INTO "digital_works"
            (task_name, description, factory_name, project_id, assigned_to, support_id, created_by,
-            expected_deadline, desired_deadline, priority, lead_project, assistant)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, 'medium'), $11, $12)
+            expected_deadline, desired_deadline, priority, lead_project, assistant,
+            representative_name, representative_email, representative_phone, workflow_status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, 'medium'), $11, $12, $13, $14, $15, 'requested')
          RETURNING *`,
         [
           task_name, description || null, factory_name || null,
           nextProjectID, nextAssignedTo, nextSupportId, req.user.id,
           expected_deadline || null, desired_deadline || null, priority || null,
           lead_project || null, assistant || null,
+          representative_name || null, representative_email || null, representative_phone || null,
         ],
       );
 
       await logActivity(req, 'CREATE_WORK', rows[0].id, null, rows[0]);
+
+      // ✅ Thông báo Manager (Teams + mail) khi có dự án mới ở trạng thái "Yêu cầu"
+      try {
+        await notificationService.notifyWorkCreated(rows[0]);
+      } catch (notifyError) {
+        console.error('[works-create-notify]', notifyError);
+      }
+
       return res.status(201).json(mapWork(rows[0]));
     } catch (error) {
       if (db.isForeignKeyViolation(error)) {
@@ -216,12 +233,19 @@ module.exports = (context) => {
       const {
         task_name, description, factory_name, project_id,
         lead_project, assistant,
+        representative_name, representative_email, representative_phone,
         expected_deadline, desired_deadline, priority,
         capex_amount, estimated_saving_per_year, payback_years,
+        workflow_status,
       } = req.body;
 
       if (priority && !['high', 'medium', 'low'].includes(priority)) {
         return res.status(400).json({ message: 'Invalid priority' });
+      }
+
+      const VALID_WORKFLOW_STATUSES = ['requested', 'approved', 'in_progress', 'completed'];
+      if (workflow_status && !VALID_WORKFLOW_STATUSES.includes(workflow_status)) {
+        return res.status(400).json({ message: 'Invalid workflow_status' });
       }
 
       const isReviewer = isManagerOrAdmin(req);
@@ -264,24 +288,51 @@ module.exports = (context) => {
              support_id = $6,
              lead_project = COALESCE($7, lead_project),
              assistant = COALESCE($8, assistant),
-             expected_deadline = COALESCE($9, expected_deadline),
-             desired_deadline = COALESCE($10, desired_deadline),
-             priority = COALESCE($11, priority),
-             capex_amount = COALESCE($12, capex_amount),
-             estimated_saving_per_year = COALESCE($13, estimated_saving_per_year),
-             payback_years = COALESCE($14, payback_years),
+             representative_name = COALESCE($9, representative_name),
+             representative_email = COALESCE($10, representative_email),
+             representative_phone = COALESCE($11, representative_phone),
+             expected_deadline = COALESCE($12, expected_deadline),
+             desired_deadline = COALESCE($13, desired_deadline),
+             priority = COALESCE($14, priority),
+             capex_amount = COALESCE($15, capex_amount),
+             estimated_saving_per_year = COALESCE($16, estimated_saving_per_year),
+             payback_years = COALESCE($17, payback_years),
+             workflow_status = COALESCE($18, workflow_status),
              updated_at = NOW()
-         WHERE id = $15
+         WHERE id = $19
          RETURNING *`,
         [
           task_name, description, factory_name, nextProjectID, nextAssignedTo, nextSupportId,
           lead_project, assistant,
+          representative_name, representative_email, representative_phone,
           expected_deadline, desired_deadline, priority,
-          capex_amount, estimated_saving_per_year, payback_years, id
+          capex_amount, estimated_saving_per_year, payback_years, workflow_status || null, id
         ],
       );
 
       await logActivity(req, 'UPDATE_WORK', id, work, rows[0]);
+
+      // ✅ Thông báo PIC/Support (Teams + mail) khi dự án vừa chuyển sang "Đã duyệt"
+      const justApproved = work.workflow_status !== 'approved' && rows[0].workflow_status === 'approved';
+      if (justApproved) {
+        try {
+          const recipientIds = [rows[0].assigned_to, rows[0].support_id].filter(
+            (v) => v !== null && v !== undefined,
+          );
+          let recipientEmails = [];
+          if (recipientIds.length > 0) {
+            const { rows: userRows } = await db.query(
+              'SELECT email FROM "users" WHERE id = ANY($1::int[])',
+              [recipientIds],
+            );
+            recipientEmails = userRows.map((u) => u.email).filter(Boolean);
+          }
+          await notificationService.notifyWorkApproved(rows[0], recipientEmails);
+        } catch (notifyError) {
+          console.error('[works-approve-notify]', notifyError);
+        }
+      }
+
       return res.json(mapWork(rows[0]));
     } catch (error) {
       if (db.isForeignKeyViolation(error)) {
@@ -307,6 +358,7 @@ module.exports = (context) => {
         status, progress_percent, progress_comment,
         manager_comment, rating, has_feedback, feedback_comment,
         capex_amount, estimated_saving_per_year, payback_years,
+        support_request, workflow_status,
       } = req.body;
 
       if (progress_percent !== undefined && (progress_percent < 0 || progress_percent > 100)) {
@@ -316,6 +368,11 @@ module.exports = (context) => {
         return res.status(400).json({ message: 'rating phải từ 1 đến 5' });
       }
 
+      const VALID_WORKFLOW_STATUSES = ['requested', 'approved', 'in_progress', 'completed'];
+      if (workflow_status && !VALID_WORKFLOW_STATUSES.includes(workflow_status)) {
+        return res.status(400).json({ message: 'Invalid workflow_status' });
+      }
+
       const isReviewer = isManagerOrAdmin(req);
       const nextManagerComment = isReviewer ? manager_comment : work.manager_comment;
       const nextRating = isReviewer ? rating : work.rating;
@@ -323,6 +380,10 @@ module.exports = (context) => {
       const nextFeedbackComment = isReviewer ? feedback_comment : work.feedback_comment;
 
       const completedAt = status !== undefined && Number(status) >= 2 ? new Date() : work.completed_at;
+
+      // ✅ Tiến độ đạt 100% thì luôn tự động chuyển trạng thái quy trình sang "Hoàn thành"
+      const nextProgressPercent = progress_percent !== undefined ? Number(progress_percent) : work.progress_percent;
+      const nextWorkflowStatus = nextProgressPercent >= 100 ? 'completed' : (workflow_status || work.workflow_status);
 
       const { rows } = await db.query(
         `UPDATE "digital_works"
@@ -336,19 +397,37 @@ module.exports = (context) => {
              capex_amount = COALESCE($8, capex_amount),
              estimated_saving_per_year = COALESCE($9, estimated_saving_per_year),
              payback_years = COALESCE($10, payback_years),
-             completed_at = $11,
+             support_request = COALESCE($11, support_request),
+             workflow_status = $12,
+             completed_at = $13,
              updated_at = NOW()
-         WHERE id = $12
+         WHERE id = $14
          RETURNING *`,
         [
           status, progress_percent, progress_comment, nextManagerComment, nextRating,
           nextHasFeedback, nextFeedbackComment,
           capex_amount, estimated_saving_per_year, payback_years,
-          completedAt, id
+          support_request, nextWorkflowStatus, completedAt, id
         ],
       );
 
       await logActivity(req, 'UPDATE_WORK_PROGRESS', id, work, rows[0]);
+
+      // ✅ Thông báo nhóm Teams + mail Manager khi chuyển sang "Thực hiện" (Chấp nhận) hoặc "Hoàn thành" (100%)
+      const prevWorkflowStatus = work.workflow_status;
+      const newWorkflowStatus = rows[0].workflow_status;
+      if (prevWorkflowStatus !== newWorkflowStatus) {
+        try {
+          if (newWorkflowStatus === 'in_progress') {
+            await notificationService.notifyWorkInProgress(rows[0]);
+          } else if (newWorkflowStatus === 'completed') {
+            await notificationService.notifyWorkCompleted(rows[0]);
+          }
+        } catch (notifyError) {
+          console.error('[works-progress-notify]', notifyError);
+        }
+      }
+
       return res.json(mapWork(rows[0]));
     } catch (error) {
       return handleServerError(res, error, 'works-progress-update');

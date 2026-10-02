@@ -52,6 +52,7 @@ module.exports = (context) => {
     url: row.file_path,
     original_name: row.original_name,
     mime_type: row.mime_type,
+    category: row.category,
     uploaded_by: row.uploaded_by,
     created_at: row.created_at,
   });
@@ -78,16 +79,18 @@ module.exports = (context) => {
       const access = await canAccessWork(req, workId);
       if (!access.ok) return res.status(access.status).json({ message: access.message });
 
+      const category = typeof req.body.category === 'string' && req.body.category.trim() ? req.body.category.trim() : 'general';
+
       const files = req.files || [];
       const inserted = [];
       for (const file of files) {
         const result = await uploadToCloudinary(file);
 
         const { rows } = await db.query(
-          `INSERT INTO "work_attachments" (work_id, file_path, public_id, resource_type, format, original_name, mime_type, uploaded_by)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          `INSERT INTO "work_attachments" (work_id, file_path, public_id, resource_type, format, original_name, mime_type, category, uploaded_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
            RETURNING *`,
-          [workId, result.secure_url, result.public_id, result.resource_type, result.format, file.originalname, file.mimetype, req.user.id],
+          [workId, result.secure_url, result.public_id, result.resource_type, result.format, file.originalname, file.mimetype, category, req.user.id],
         );
         inserted.push(rows[0]);
       }

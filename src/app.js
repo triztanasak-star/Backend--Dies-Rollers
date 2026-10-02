@@ -7,6 +7,7 @@ const crypto = require('crypto');
 require('dotenv').config();
 
 const db = require('./db');
+const notificationService = require('./services/notificationService');
 
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const IS_PROD_LIKE = NODE_ENV !== 'development';
@@ -252,6 +253,7 @@ const sanitizeUser = (u) => ({
 
 const context = {
   db,
+  notificationService,
   jwt,
   bcrypt,
   BCRYPT_ROUNDS,
