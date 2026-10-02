@@ -1,6 +1,9 @@
 {
   "name": "digital_work_backend",
   "version": "1.0.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "type": "commonjs",
   "main": "src/server.js",
   "scripts": {
