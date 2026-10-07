@@ -13,6 +13,12 @@ module.exports = (context) => {
     logActivity,
   } = context;
 
+  // ✅ Hàm xác định tên bảng dựa vào query param type
+  // Mặc định là 'die' để giữ tương thích với code cũ
+  const getTableName = (req) => {
+    return req.query.type === 'roller' ? 'digital_roller_works' : 'digital_works';
+  };
+
   const mapWork = (row) => ({
     $id: String(row.id),
     id: row.id,
@@ -49,16 +55,44 @@ module.exports = (context) => {
     rating: row.rating,
     created_at: row.created_at,
     updated_at: row.updated_at,
+
+    // ✅ Giữ nguyên tên field (dies_model, dies_code...) vì DB vẫn dùng tên này
+    dies_model: row.dies_model,
+    dies_code: row.dies_code,
+    symptom: row.symptom,
+    supplier: row.supplier,
+
+    // ✅ SỬA: Bỏ Number() — giữ nguyên value
+    // - Die: dies_hole_mm là number (2.5, 2.8, 3.5, 4.0)
+    // - Roller: dies_hole_mm là string ("8x10", "8x12", "No Hole")
+    // PostgreSQL tự trả đúng kiểu, không cần ép
+    dies_hole_mm: row.dies_hole_mm !== null && row.dies_hole_mm !== undefined
+      ? row.dies_hole_mm
+      : null,
+
+    press_length_mm: row.press_length_mm ?? null,
+    ld_ratio: row.ld_ratio !== null && row.ld_ratio !== undefined ? Number(row.ld_ratio) : null,
+    dies_life_ton: row.dies_life_ton !== null && row.dies_life_ton !== undefined ? Number(row.dies_life_ton) : null,
+    standard_ton: row.standard_ton !== null && row.standard_ton !== undefined ? Number(row.standard_ton) : null,
+    remaining_tons: row.remaining_tons !== null && row.remaining_tons !== undefined ? Number(row.remaining_tons) : null,
+    start_date: row.start_date,
+    end_date: row.end_date,
+    dies_price_vnd: row.dies_price_vnd !== null && row.dies_price_vnd !== undefined ? Number(row.dies_price_vnd) : null,
+    price_per_ton_vnd: row.price_per_ton_vnd !== null && row.price_per_ton_vnd !== undefined ? Number(row.price_per_ton_vnd) : null,
+    result_cost_per_ton_vnd: row.result_cost_per_ton_vnd !== null && row.result_cost_per_ton_vnd !== undefined ? Number(row.result_cost_per_ton_vnd) : null,
+    line_in_use: row.line_in_use,
+    image_before: row.image_before,
+    image_after: row.image_after,
   });
 
-  const worksQueryBase = `
+  // ✅ Hàm tạo query base động theo tableName
+  const getWorksQueryBase = (tableName) => `
     SELECT dw.*, leader.name AS assigned_to_name, support.name AS support_name
-    FROM "digital_works" dw
+    FROM "${tableName}" dw
     LEFT JOIN "users" leader ON leader.id = dw.assigned_to
     LEFT JOIN "users" support ON support.id = dw.support_id
   `;
 
-  // Kiểm tra quyền: Admin/Manager HOẶC PIC (assigned_to) HOẶC Support (support_id)
   const canModifyWork = (req, work) => {
     const userId = Number(req.user.id);
     return isManagerOrAdmin(req) ||
@@ -66,14 +100,11 @@ module.exports = (context) => {
       (work.support_id !== null && Number(work.support_id) === userId);
   };
 
-  // ✅ HÀM MỚI: Tự động convert tên → ID
   const resolveUserId = async (idOrName, fallbackName) => {
-    // Nếu đã là số hợp lệ → dùng luôn
     if (idOrName !== undefined && idOrName !== null && idOrName !== '') {
       const num = Number(idOrName);
       if (!isNaN(num) && num > 0) return num;
     }
-    // Nếu là tên → lookup ID
     const searchValue = idOrName || fallbackName;
     if (!searchValue || typeof searchValue !== 'string') return null;
 
@@ -92,9 +123,12 @@ module.exports = (context) => {
     return null;
   };
 
-  // List - Tất cả các role đều lấy toàn bộ danh sách dùng chung
+  // ✅ GET /api/works — Hỗ trợ ?type=roller
   router.get('/api/works', authMiddleware, async (req, res) => {
     try {
+      const tableName = getTableName(req);
+      const worksQueryBase = getWorksQueryBase(tableName);
+
       const { page, limit, offset } = parsePagination(req);
       const filters = ['dw.is_deleted = false'];
       const params = [];
@@ -103,7 +137,6 @@ module.exports = (context) => {
         params.push(Number(req.query.assigned_to));
         filters.push(`dw.assigned_to = $${params.length}`);
       }
-
       if (req.query.project_id) {
         params.push(Number(req.query.project_id));
         filters.push(`dw.project_id = $${params.length}`);
@@ -114,7 +147,7 @@ module.exports = (context) => {
       }
 
       const whereClause = `WHERE ${filters.join(' AND ')}`;
-      const countQuery = `SELECT COUNT(*)::int AS total FROM "digital_works" dw ${whereClause}`;
+      const countQuery = `SELECT COUNT(*)::int AS total FROM "${tableName}" dw ${whereClause}`;
       const rowsQuery = `${worksQueryBase} ${whereClause}
         ORDER BY dw.id ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
 
@@ -134,10 +167,49 @@ module.exports = (context) => {
     }
   });
 
+  // ✅ GET /api/works/:id/public — Hỗ trợ ?type=roller
+  router.get('/api/works/:id/public', async (req, res) => {
+    try {
+      const tableName = getTableName(req);
+      const id = Number(req.params.id);
+      if (isNaN(id) || id <= 0) {
+        return res.status(400).json({ message: 'Invalid ID' });
+      }
+
+      const { rows } = await db.query(
+        `SELECT 
+          id, task_name, dies_model, dies_code, supplier,
+          dies_hole_mm, press_length_mm, ld_ratio, line_in_use,
+          standard_ton, dies_life_ton, remaining_tons,
+          dies_price_vnd, price_per_ton_vnd, result_cost_per_ton_vnd,
+          symptom, status,
+          created_at, expected_deadline, completed_at
+         FROM "${tableName}" 
+         WHERE id = $1 AND is_deleted = false`,
+        [id]
+      );
+
+      if (!rows.length) {
+        return res.status(404).json({ message: 'Work not found' });
+      }
+
+      return res.json(mapWork(rows[0]));
+    } catch (error) {
+      return handleServerError(res, error, 'works-get-public');
+    }
+  });
+
+  // ✅ GET /api/works/:id — Hỗ trợ ?type=roller
   router.get('/api/works/:id', authMiddleware, async (req, res) => {
     try {
+      const tableName = getTableName(req);
+      const worksQueryBase = getWorksQueryBase(tableName);
       const id = Number(req.params.id);
-      const { rows } = await db.query(`${worksQueryBase} WHERE dw.id = $1 AND dw.is_deleted = false`, [id]);
+
+      const { rows } = await db.query(
+        `${worksQueryBase} WHERE dw.id = $1 AND dw.is_deleted = false`,
+        [id]
+      );
       if (!rows.length) return res.status(404).json({ message: 'Work not found' });
 
       return res.json(mapWork(rows[0]));
@@ -146,13 +218,19 @@ module.exports = (context) => {
     }
   });
 
-  // Tạo công việc mới - ✅ CÓ AUTO-CONVERT
+  // ✅ POST /api/works — Hỗ trợ ?type=roller
   router.post('/api/works', authMiddleware, async (req, res) => {
     try {
+      const tableName = getTableName(req);
+
       const {
         task_name, description, factory_name, expected_deadline, desired_deadline, priority,
+        status,
         project_id, lead_project, assistant,
         representative_name, representative_email, representative_phone,
+        dies_model, dies_code, symptom, supplier,
+        dies_hole_mm, press_length_mm, ld_ratio, dies_life_ton, standard_ton, remaining_tons,
+        dies_price_vnd, price_per_ton_vnd, result_cost_per_ton_vnd, line_in_use,
       } = req.body;
 
       const isReviewer = isManagerOrAdmin(req);
@@ -162,7 +240,6 @@ module.exports = (context) => {
         return res.status(400).json({ message: 'Invalid priority' });
       }
 
-      // ✅ AUTO-CONVERT: chấp nhận cả ID và tên
       let nextProjectID = isReviewer ? (project_id || null) : null;
       let nextAssignedTo = null;
       let nextSupportId = null;
@@ -172,23 +249,18 @@ module.exports = (context) => {
         nextSupportId = await resolveUserId(req.body.support_id, assistant);
       }
 
-      console.log('[POST /api/works] Input:', {
-        assigned_to: req.body.assigned_to,
-        lead_project,
-        support_id: req.body.support_id,
-        assistant,
-      });
-      console.log('[POST /api/works] Resolved:', {
-        assigned_to: nextAssignedTo,
-        support_id: nextSupportId,
-      });
-
       const { rows } = await db.query(
-        `INSERT INTO "digital_works"
+        `INSERT INTO "${tableName}"
            (task_name, description, factory_name, project_id, assigned_to, support_id, created_by,
             expected_deadline, desired_deadline, priority, lead_project, assistant,
-            representative_name, representative_email, representative_phone, workflow_status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, 'medium'), $11, $12, $13, $14, $15, 'requested')
+            representative_name, representative_email, representative_phone, workflow_status,
+            status,
+            dies_model, dies_code, symptom, supplier,
+            dies_hole_mm, press_length_mm, ld_ratio, dies_life_ton, standard_ton, remaining_tons,
+            dies_price_vnd, price_per_ton_vnd, result_cost_per_ton_vnd, line_in_use)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, 'medium'), $11, $12, $13, $14, $15, 'requested',
+                 COALESCE($30, 0),
+                 $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
          RETURNING *`,
         [
           task_name, description || null, factory_name || null,
@@ -196,12 +268,24 @@ module.exports = (context) => {
           expected_deadline || null, desired_deadline || null, priority || null,
           lead_project || null, assistant || null,
           representative_name || null, representative_email || null, representative_phone || null,
+          dies_model || null, dies_code || null, symptom || null, supplier || null,
+          // ✅ dies_hole_mm: giữ nguyên value (string hoặc number)
+          dies_hole_mm ?? null,
+          press_length_mm ?? null,
+          ld_ratio ?? null,
+          dies_life_ton ?? null,
+          standard_ton ?? null,
+          remaining_tons ?? null,
+          dies_price_vnd ?? null,
+          price_per_ton_vnd ?? null,
+          result_cost_per_ton_vnd ?? null,
+          line_in_use || null,
+          Number(status) || 0,
         ],
       );
 
       await logActivity(req, 'CREATE_WORK', rows[0].id, null, rows[0]);
 
-      // ✅ Thông báo Manager (Teams + mail) khi có dự án mới ở trạng thái "Yêu cầu"
       try {
         await notificationService.notifyWorkCreated(rows[0]);
       } catch (notifyError) {
@@ -217,12 +301,16 @@ module.exports = (context) => {
     }
   });
 
-  // Sửa thông tin task - ✅ CÓ AUTO-CONVERT
+  // ✅ PUT /api/works/:id — Hỗ trợ ?type=roller
   router.put('/api/works/:id', authMiddleware, async (req, res) => {
     try {
+      const tableName = getTableName(req);
       const id = Number(req.params.id);
-      
-      const existing = await db.query('SELECT * FROM "digital_works" WHERE id = $1 AND is_deleted = false', [id]);
+
+      const existing = await db.query(
+        `SELECT * FROM "${tableName}" WHERE id = $1 AND is_deleted = false`,
+        [id]
+      );
       if (!existing.rows.length) return res.status(404).json({ message: 'Work not found' });
 
       const work = existing.rows[0];
@@ -235,8 +323,12 @@ module.exports = (context) => {
         lead_project, assistant,
         representative_name, representative_email, representative_phone,
         expected_deadline, desired_deadline, priority,
+        status,
         capex_amount, estimated_saving_per_year, payback_years,
         workflow_status,
+        dies_model, dies_code, symptom, supplier,
+        dies_hole_mm, press_length_mm, ld_ratio, dies_life_ton, standard_ton, remaining_tons,
+        dies_price_vnd, price_per_ton_vnd, result_cost_per_ton_vnd, line_in_use,
       } = req.body;
 
       if (priority && !['high', 'medium', 'low'].includes(priority)) {
@@ -250,7 +342,6 @@ module.exports = (context) => {
 
       const isReviewer = isManagerOrAdmin(req);
 
-      // ✅ AUTO-CONVERT: chấp nhận cả ID và tên
       let nextAssignedTo = work.assigned_to;
       let nextSupportId = work.support_id;
 
@@ -267,19 +358,8 @@ module.exports = (context) => {
         ? (project_id !== undefined ? project_id : work.project_id)
         : work.project_id;
 
-      console.log('[PUT /api/works] Input:', {
-        assigned_to: req.body.assigned_to,
-        lead_project,
-        support_id: req.body.support_id,
-        assistant,
-      });
-      console.log('[PUT /api/works] Resolved:', {
-        assigned_to: nextAssignedTo,
-        support_id: nextSupportId,
-      });
-
       const { rows } = await db.query(
-        `UPDATE "digital_works"
+        `UPDATE "${tableName}"
          SET task_name = COALESCE($1, task_name),
              description = COALESCE($2, description),
              factory_name = COALESCE($3, factory_name),
@@ -298,21 +378,42 @@ module.exports = (context) => {
              estimated_saving_per_year = COALESCE($16, estimated_saving_per_year),
              payback_years = COALESCE($17, payback_years),
              workflow_status = COALESCE($18, workflow_status),
+             status = COALESCE($19, status),
+             dies_model = COALESCE($20, dies_model),
+             dies_code = COALESCE($21, dies_code),
+             symptom = COALESCE($22, symptom),
+             supplier = COALESCE($23, supplier),
+             dies_hole_mm = COALESCE($24, dies_hole_mm),
+             press_length_mm = COALESCE($25, press_length_mm),
+             ld_ratio = COALESCE($26, ld_ratio),
+             dies_life_ton = COALESCE($27, dies_life_ton),
+             standard_ton = COALESCE($28, standard_ton),
+             remaining_tons = COALESCE($29, remaining_tons),
+             dies_price_vnd = COALESCE($30, dies_price_vnd),
+             price_per_ton_vnd = COALESCE($31, price_per_ton_vnd),
+             result_cost_per_ton_vnd = COALESCE($32, result_cost_per_ton_vnd),
+             line_in_use = COALESCE($33, line_in_use),
              updated_at = NOW()
-         WHERE id = $19
+         WHERE id = $34
          RETURNING *`,
         [
           task_name, description, factory_name, nextProjectID, nextAssignedTo, nextSupportId,
           lead_project, assistant,
           representative_name, representative_email, representative_phone,
           expected_deadline, desired_deadline, priority,
-          capex_amount, estimated_saving_per_year, payback_years, workflow_status || null, id
+          capex_amount, estimated_saving_per_year, payback_years, workflow_status || null,
+          status !== undefined && status !== null ? Number(status) : null,
+          dies_model, dies_code, symptom, supplier,
+          // ✅ dies_hole_mm: giữ nguyên value (string hoặc number)
+          dies_hole_mm,
+          press_length_mm, ld_ratio, dies_life_ton, standard_ton, remaining_tons,
+          dies_price_vnd, price_per_ton_vnd, result_cost_per_ton_vnd, line_in_use,
+          id
         ],
       );
 
       await logActivity(req, 'UPDATE_WORK', id, work, rows[0]);
 
-      // ✅ Thông báo PIC/Support (Teams + mail) khi dự án vừa chuyển sang "Đã duyệt"
       const justApproved = work.workflow_status !== 'approved' && rows[0].workflow_status === 'approved';
       if (justApproved) {
         try {
@@ -342,11 +443,16 @@ module.exports = (context) => {
     }
   });
 
-  // Cập nhật tiến độ
+  // ✅ PATCH /api/works/:id/progress — Hỗ trợ ?type=roller
   router.patch('/api/works/:id/progress', authMiddleware, async (req, res) => {
     try {
+      const tableName = getTableName(req);
       const id = Number(req.params.id);
-      const existing = await db.query('SELECT * FROM "digital_works" WHERE id = $1 AND is_deleted = false', [id]);
+
+      const existing = await db.query(
+        `SELECT * FROM "${tableName}" WHERE id = $1 AND is_deleted = false`,
+        [id]
+      );
       if (!existing.rows.length) return res.status(404).json({ message: 'Work not found' });
 
       const work = existing.rows[0];
@@ -359,10 +465,18 @@ module.exports = (context) => {
         manager_comment, rating, has_feedback, feedback_comment,
         capex_amount, estimated_saving_per_year, payback_years,
         support_request, workflow_status,
+        dies_model, dies_code, supplier,
+        dies_hole_mm, press_length_mm, ld_ratio,
+        line_in_use, standard_ton, dies_life_ton, dies_price_vnd,
+        remaining_tons, price_per_ton_vnd, result_cost_per_ton_vnd,
+        symptom,
+        expected_deadline,
+        desired_deadline,
+        completed_at,
       } = req.body;
 
-      if (progress_percent !== undefined && (progress_percent < 0 || progress_percent > 100)) {
-        return res.status(400).json({ message: 'progress_percent phải từ 0 đến 100' });
+      if (progress_percent !== undefined && progress_percent !== null && Number(progress_percent) < 0) {
+        return res.status(400).json({ message: 'Số tấn không được âm' });
       }
       if (rating !== undefined && rating !== null && (rating < 1 || rating > 5)) {
         return res.status(400).json({ message: 'rating phải từ 1 đến 5' });
@@ -379,14 +493,19 @@ module.exports = (context) => {
       const nextHasFeedback = isReviewer ? has_feedback : work.has_feedback;
       const nextFeedbackComment = isReviewer ? feedback_comment : work.feedback_comment;
 
-      const completedAt = status !== undefined && Number(status) >= 2 ? new Date() : work.completed_at;
+      let completedAtValue;
+      if (status !== undefined && Number(status) >= 2) {
+        completedAtValue = new Date();
+      } else if (completed_at !== undefined) {
+        completedAtValue = completed_at;
+      } else {
+        completedAtValue = work.completed_at;
+      }
 
-      // ✅ Tiến độ đạt 100% thì luôn tự động chuyển trạng thái quy trình sang "Hoàn thành"
-      const nextProgressPercent = progress_percent !== undefined ? Number(progress_percent) : work.progress_percent;
-      const nextWorkflowStatus = nextProgressPercent >= 100 ? 'completed' : (workflow_status || work.workflow_status);
+      const nextWorkflowStatus = Number(status) >= 2 ? 'completed' : (workflow_status || work.workflow_status);
 
       const { rows } = await db.query(
-        `UPDATE "digital_works"
+        `UPDATE "${tableName}"
          SET status = COALESCE($1, status),
              progress_percent = COALESCE($2, progress_percent),
              progress_comment = COALESCE($3, progress_comment),
@@ -400,20 +519,54 @@ module.exports = (context) => {
              support_request = COALESCE($11, support_request),
              workflow_status = $12,
              completed_at = $13,
+             dies_model = COALESCE($14, dies_model),
+             dies_code = COALESCE($15, dies_code),
+             supplier = COALESCE($16, supplier),
+             dies_hole_mm = COALESCE($17, dies_hole_mm),
+             press_length_mm = COALESCE($18, press_length_mm),
+             ld_ratio = COALESCE($19, ld_ratio),
+             line_in_use = COALESCE($20, line_in_use),
+             standard_ton = COALESCE($21, standard_ton),
+             dies_life_ton = COALESCE($22, dies_life_ton),
+             dies_price_vnd = COALESCE($23, dies_price_vnd),
+             remaining_tons = COALESCE($24, remaining_tons),
+             price_per_ton_vnd = COALESCE($25, price_per_ton_vnd),
+             result_cost_per_ton_vnd = COALESCE($26, result_cost_per_ton_vnd),
+             symptom = COALESCE($27, symptom),
+             expected_deadline = COALESCE($28, expected_deadline),
+             desired_deadline = COALESCE($29, desired_deadline),
              updated_at = NOW()
-         WHERE id = $14
+         WHERE id = $30
          RETURNING *`,
         [
           status, progress_percent, progress_comment, nextManagerComment, nextRating,
           nextHasFeedback, nextFeedbackComment,
           capex_amount, estimated_saving_per_year, payback_years,
-          support_request, nextWorkflowStatus, completedAt, id
+          support_request, nextWorkflowStatus, completedAtValue,
+
+          dies_model ?? null,
+          dies_code ?? null,
+          supplier ?? null,
+          // ✅ dies_hole_mm: giữ nguyên value (string hoặc number)
+          dies_hole_mm ?? null,
+          press_length_mm ?? null,
+          ld_ratio ?? null,
+          line_in_use ?? null,
+          standard_ton ?? null,
+          dies_life_ton ?? null,
+          dies_price_vnd ?? null,
+          remaining_tons ?? null,
+          price_per_ton_vnd ?? null,
+          result_cost_per_ton_vnd ?? null,
+          symptom ?? null,
+          expected_deadline ?? null,
+          desired_deadline ?? null,
+          id,
         ],
       );
 
       await logActivity(req, 'UPDATE_WORK_PROGRESS', id, work, rows[0]);
 
-      // ✅ Thông báo nhóm Teams + mail Manager khi chuyển sang "Thực hiện" (Chấp nhận) hoặc "Hoàn thành" (100%)
       const prevWorkflowStatus = work.workflow_status;
       const newWorkflowStatus = rows[0].workflow_status;
       if (prevWorkflowStatus !== newWorkflowStatus) {
@@ -434,11 +587,16 @@ module.exports = (context) => {
     }
   });
 
-  // Xóa (soft delete) - Chỉ Admin/Manager
+  // ✅ DELETE /api/works/:id — Hỗ trợ ?type=roller
   router.delete('/api/works/:id', authMiddleware, async (req, res) => {
     try {
+      const tableName = getTableName(req);
       const id = Number(req.params.id);
-      const existing = await db.query('SELECT * FROM "digital_works" WHERE id = $1 AND is_deleted = false', [id]);
+
+      const existing = await db.query(
+        `SELECT * FROM "${tableName}" WHERE id = $1 AND is_deleted = false`,
+        [id]
+      );
       if (!existing.rows.length) return res.status(404).json({ message: 'Work not found' });
 
       if (!isManagerOrAdmin(req)) {
@@ -446,7 +604,7 @@ module.exports = (context) => {
       }
 
       const { rows } = await db.query(
-        'UPDATE "digital_works" SET is_deleted = true, updated_at = NOW() WHERE id = $1 RETURNING *',
+        `UPDATE "${tableName}" SET is_deleted = true, updated_at = NOW() WHERE id = $1 RETURNING *`,
         [id],
       );
 

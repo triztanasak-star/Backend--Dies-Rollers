@@ -279,6 +279,7 @@ app.use(require('./routes/projects.routes')(context));
 app.use(require('./routes/works.routes')(context));
 app.use(require('./routes/taskPlans.routes')(context));
 app.use(require('./routes/attachments.routes')(context));
+app.use(require('./routes/settings.routes')(context));   // ✅ THÊM DÒNG NÀY
 
 // Health check
 app.get('/api/health', (_req, res) => {

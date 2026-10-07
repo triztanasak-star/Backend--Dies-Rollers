@@ -17,8 +17,6 @@ const upload = multer({
 
 const uploadToCloudinary = (file) => {
   const dataUri = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
-  
-  // Ép kiểu resource_type thành 'raw' nếu là file PDF để tránh bị Cloudinary nhận diện nhầm thành image
   const resourceType = file.mimetype === 'application/pdf' ? 'raw' : 'auto';
 
   return cloudinary.uploader.upload(dataUri, {
@@ -33,8 +31,18 @@ module.exports = (context) => {
   const router = express.Router();
   const { db, authMiddleware, isManagerOrAdmin, handleServerError, logActivity } = context;
 
+  // ✅ Hàm chọn bảng works theo type
+  const getWorksTable = (req) => {
+    return req.query.type === 'roller' ? 'digital_roller_works' : 'digital_works';
+  };
+
+  // ✅ Sửa canAccessWork: query đúng bảng works theo type
   const canAccessWork = async (req, workId) => {
-    const { rows } = await db.query('SELECT * FROM "digital_works" WHERE id = $1 AND is_deleted = false', [workId]);
+    const worksTable = getWorksTable(req);
+    const { rows } = await db.query(
+      `SELECT * FROM "${worksTable}" WHERE id = $1 AND is_deleted = false`,
+      [workId]
+    );
     if (!rows.length) return { ok: false, status: 404, message: 'Work not found' };
     const work = rows[0];
     const allowed = isManagerOrAdmin(req)
@@ -57,10 +65,11 @@ module.exports = (context) => {
     created_at: row.created_at,
   });
 
+  // ✅ GET list — dùng chung bảng work_attachments, chỉ cần canAccessWork đúng
   router.get('/api/works/:workId/attachments', authMiddleware, async (req, res) => {
     try {
       const workId = Number(req.params.workId);
-      const access = await canAccessWork(req, workId);
+      const access = await canAccessWork(req, workId);   // ✅ Sửa: dùng type
       if (!access.ok) return res.status(access.status).json({ message: access.message });
 
       const { rows } = await db.query(
@@ -76,7 +85,7 @@ module.exports = (context) => {
   router.post('/api/works/:workId/attachments', authMiddleware, upload.array('files', 5), async (req, res) => {
     try {
       const workId = Number(req.params.workId);
-      const access = await canAccessWork(req, workId);
+      const access = await canAccessWork(req, workId);   // ✅ Sửa: dùng type
       if (!access.ok) return res.status(access.status).json({ message: access.message });
 
       const category = typeof req.body.category === 'string' && req.body.category.trim() ? req.body.category.trim() : 'general';
@@ -116,16 +125,14 @@ module.exports = (context) => {
       if (!access.ok) return res.status(access.status).json({ message: access.message });
 
       const fileUrl = attachment.file_path;
-      if (!fileUrl) {
-        return res.status(404).json({ message: 'File not found on storage' });
-      }
+      if (!fileUrl) return res.status(404).json({ message: 'File not found on storage' });
 
-      // Điều hướng thẳng trình duyệt đến link Cloudinary để tải hoặc xem trực tiếp siêu mượt
       return res.redirect(fileUrl);
     } catch (error) {
       return handleServerError(res, error, 'attachments-download');
     }
   });
+
   router.delete('/api/attachments/:id', authMiddleware, async (req, res) => {
     try {
       const id = Number(req.params.id);

@@ -1,9 +1,27 @@
+-- File: 003_create_digital_works.sql
 CREATE TABLE IF NOT EXISTS public.digital_works (
     id SERIAL PRIMARY KEY,
-    title VARCHAR(255),
-    project_id INT,
+    title VARCHAR(255),          -- Giữ lại cột cũ để tương thích ngược
+    project_id INT,              -- Giữ lại cột cũ
     assigned_to INT,
-    assistant VARCHAR(255)
+    assistant VARCHAR(255),
+    
+    -- Các cột bổ sung theo yêu cầu của code Backend
+    task_name VARCHAR(255),
+    description TEXT,
+    plant VARCHAR(255),
+    priority VARCHAR(50),
+    lead_project INT,
+    support_id INT,
+    status VARCHAR(50) DEFAULT 'pending',
+    progress_percent INTEGER DEFAULT 0,
+    start_date DATE,
+    deadline DATE,
+    finance_fields JSONB,
+    workflow_status VARCHAR(50),
+    
+    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Đảm bảo ép thêm khóa chính nếu bảng đã tồn tại từ trước mà chưa có
