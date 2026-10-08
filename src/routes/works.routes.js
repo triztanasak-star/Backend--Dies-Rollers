@@ -14,7 +14,6 @@ module.exports = (context) => {
   } = context;
 
   // ✅ Hàm xác định tên bảng dựa vào query param type
-  // Mặc định là 'die' để giữ tương thích với code cũ
   const getTableName = (req) => {
     return req.query.type === 'roller' ? 'digital_roller_works' : 'digital_works';
   };
@@ -56,16 +55,11 @@ module.exports = (context) => {
     created_at: row.created_at,
     updated_at: row.updated_at,
 
-    // ✅ Giữ nguyên tên field (dies_model, dies_code...) vì DB vẫn dùng tên này
     dies_model: row.dies_model,
     dies_code: row.dies_code,
     symptom: row.symptom,
     supplier: row.supplier,
 
-    // ✅ SỬA: Bỏ Number() — giữ nguyên value
-    // - Die: dies_hole_mm là number (2.5, 2.8, 3.5, 4.0)
-    // - Roller: dies_hole_mm là string ("8x10", "8x12", "No Hole")
-    // PostgreSQL tự trả đúng kiểu, không cần ép
     dies_hole_mm: row.dies_hole_mm !== null && row.dies_hole_mm !== undefined
       ? row.dies_hole_mm
       : null,
@@ -85,7 +79,6 @@ module.exports = (context) => {
     image_after: row.image_after,
   });
 
-  // ✅ Hàm tạo query base động theo tableName
   const getWorksQueryBase = (tableName) => `
     SELECT dw.*, leader.name AS assigned_to_name, support.name AS support_name
     FROM "${tableName}" dw
@@ -221,6 +214,10 @@ module.exports = (context) => {
   // ✅ POST /api/works — Hỗ trợ ?type=roller
   router.post('/api/works', authMiddleware, async (req, res) => {
     try {
+      // ✅ DEBUG: Log ra để biết chính xác req.body có gì
+      console.log('--- [works-create] req.body ---', req.body);
+      console.log('--- [works-create] req.headers["content-type"] ---', req.headers['content-type']);
+
       const tableName = getTableName(req);
 
       const {
@@ -231,11 +228,14 @@ module.exports = (context) => {
         dies_model, dies_code, symptom, supplier,
         dies_hole_mm, press_length_mm, ld_ratio, dies_life_ton, standard_ton, remaining_tons,
         dies_price_vnd, price_per_ton_vnd, result_cost_per_ton_vnd, line_in_use,
-      } = req.body;
+      } = req.body || {}; // ✅ Fallback về {} nếu req.body undefined
 
       const isReviewer = isManagerOrAdmin(req);
 
-      if (!task_name) return res.status(400).json({ message: 'Missing task_name' });
+      if (!task_name) return res.status(400).json({ 
+        message: 'Missing task_name',
+        received: req.body 
+      });
       if (priority && !['high', 'medium', 'low'].includes(priority)) {
         return res.status(400).json({ message: 'Invalid priority' });
       }
@@ -269,7 +269,6 @@ module.exports = (context) => {
           lead_project || null, assistant || null,
           representative_name || null, representative_email || null, representative_phone || null,
           dies_model || null, dies_code || null, symptom || null, supplier || null,
-          // ✅ dies_hole_mm: giữ nguyên value (string hoặc number)
           dies_hole_mm ?? null,
           press_length_mm ?? null,
           ld_ratio ?? null,
@@ -329,7 +328,7 @@ module.exports = (context) => {
         dies_model, dies_code, symptom, supplier,
         dies_hole_mm, press_length_mm, ld_ratio, dies_life_ton, standard_ton, remaining_tons,
         dies_price_vnd, price_per_ton_vnd, result_cost_per_ton_vnd, line_in_use,
-      } = req.body;
+      } = req.body || {};
 
       if (priority && !['high', 'medium', 'low'].includes(priority)) {
         return res.status(400).json({ message: 'Invalid priority' });
@@ -404,7 +403,6 @@ module.exports = (context) => {
           capex_amount, estimated_saving_per_year, payback_years, workflow_status || null,
           status !== undefined && status !== null ? Number(status) : null,
           dies_model, dies_code, symptom, supplier,
-          // ✅ dies_hole_mm: giữ nguyên value (string hoặc number)
           dies_hole_mm,
           press_length_mm, ld_ratio, dies_life_ton, standard_ton, remaining_tons,
           dies_price_vnd, price_per_ton_vnd, result_cost_per_ton_vnd, line_in_use,
@@ -473,7 +471,7 @@ module.exports = (context) => {
         expected_deadline,
         desired_deadline,
         completed_at,
-      } = req.body;
+      } = req.body || {};
 
       if (progress_percent !== undefined && progress_percent !== null && Number(progress_percent) < 0) {
         return res.status(400).json({ message: 'Số tấn không được âm' });
@@ -547,7 +545,6 @@ module.exports = (context) => {
           dies_model ?? null,
           dies_code ?? null,
           supplier ?? null,
-          // ✅ dies_hole_mm: giữ nguyên value (string hoặc number)
           dies_hole_mm ?? null,
           press_length_mm ?? null,
           ld_ratio ?? null,

@@ -6,7 +6,6 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 
-
 const db = require('./db');
 const notificationService = require('./services/notificationService');
 
@@ -71,17 +70,12 @@ console.log('[CORS] Allowed origins:', allowedOrigins);
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
-
     const normalized = sanitizeOrigin(origin);
-
     if (!IS_PROD_LIKE && allowedOrigins.length === 0) return callback(null, true);
-
     if (allowedOrigins.includes(normalized)) return callback(null, true);
-
     if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(normalized)) {
       return callback(null, true);
     }
-
     console.warn('[CORS] Blocked origin:', normalized);
     return callback(null, false);
   },
@@ -94,8 +88,9 @@ app.use(cors({
 
 app.options('/*splat', cors());
 
-// 3. Body parser
-app.use(express.json({ limit: process.env.JSON_LIMIT || '256kb' }));
+// 3. Body parser - ✅ SỬA: Tăng limit để chứa FormData
+app.use(express.json({ limit: process.env.JSON_LIMIT || '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true })); // ✅ THÊM DÒNG NÀY
 
 // 4. Cookie parser
 app.use(cookieParser());
@@ -123,10 +118,8 @@ const logActivity = async (req, action, targetId = null, oldValues = null, newVa
   try {
     let userId = req.user ? req.user.id : null;
     if (!userId && newValues?.id) userId = newValues.id;
-
     const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '';
     const userAgent = req.headers['user-agent'] || '';
-
     await db.query(
       `INSERT INTO "activity_logs"
        (user_id, action, target_id, old_values, new_values, ip_address, user_agent)
@@ -142,13 +135,11 @@ const logActivity = async (req, action, targetId = null, oldValues = null, newVa
 
 const authMiddleware = async (req, res, next) => {
   let token = req.headers.authorization?.split(' ')[1];
-
   if (!token) {
     token = req.cookies?.dw_access_token
          || req.cookies?.access_token
          || req.cookies?.token;
   }
-
   if (!token) return res.status(401).json({ message: 'No token provided' });
 
   try {
@@ -157,14 +148,11 @@ const authMiddleware = async (req, res, next) => {
       'SELECT id, role, status FROM "users" WHERE id = $1',
       [decoded.id],
     );
-
     if (!rows.length) return res.status(401).json({ message: 'User not found' });
-
     const user = rows[0];
     if (user.status !== 'active') {
       return res.status(403).json({ message: 'Account is not active' });
     }
-
     req.user = { id: user.id, role: user.role };
     return next();
   } catch (_error) {
@@ -187,8 +175,7 @@ const requireManagerOrAdmin = (req, res, next) => {
   return next();
 };
 
-// --- Rate limiting (in-memory, co gioi han size) ---
-
+// --- Rate limiting ---
 const rateStore = new Map();
 const RATE_STORE_MAX = 5000;
 
@@ -225,7 +212,6 @@ const createRateLimiter = ({ windowMs, maxRequests, scope }) => (req, res, next)
 const authRateLimiter = createRateLimiter({ windowMs: 60_000, maxRequests: 10, scope: 'auth' });
 
 // --- Cookie helper cho refresh token ---
-
 const buildCookieOptions = () => ({
   httpOnly: true,
   secure: IS_PROD_LIKE,
@@ -279,7 +265,7 @@ app.use(require('./routes/projects.routes')(context));
 app.use(require('./routes/works.routes')(context));
 app.use(require('./routes/taskPlans.routes')(context));
 app.use(require('./routes/attachments.routes')(context));
-app.use(require('./routes/settings.routes')(context));   // ✅ THÊM DÒNG NÀY
+app.use(require('./routes/settings.routes')(context));
 
 // Health check
 app.get('/api/health', (_req, res) => {
@@ -290,79 +276,6 @@ app.get('/api/health', (_req, res) => {
     cors: allowedOrigins,
   });
 });
-
-// ============================================================
-// DEBUG ENDPOINTS - TẠM THỜI, XÓA SAU KHI FIX XONG
-// ============================================================
-
-// Kiểm tra biến môi trường TEAMS_WEBHOOK_URL có nạp không
-app.get('/api/debug-env', (req, res) => {
-  const url = process.env.TEAMS_WEBHOOK_URL || '';
-  const smtpHost = process.env.SMTP_HOST || '';
-  const smtpUser = process.env.SMTP_USER || '';
-
-  res.json({
-    nodeEnv: NODE_ENV,
-    teams: {
-      hasUrl: !!url,
-      length: url.length,
-      firstChars: url.substring(0, 60),
-      lastChars: url.substring(url.length - 30),
-      hasPathsKeyword: url.includes('/paths/invoke'),
-    },
-    smtp: {
-      hasHost: !!smtpHost,
-      host: smtpHost,
-      hasUser: !!smtpUser,
-      user: smtpUser,
-    },
-    managerEmails: process.env.MANAGER_NOTIFY_EMAILS || '(chưa set)',
-  });
-});
-
-// Test gửi webhook Teams từ chính Render
-app.get('/api/test-teams', async (req, res) => {
-  const url = process.env.TEAMS_WEBHOOK_URL;
-  if (!url) {
-    return res.status(500).json({ error: 'TEAMS_WEBHOOK_URL is undefined' });
-  }
-
-  try {
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: 'Test từ Render - Digital Work' }),
-    });
-    const body = await r.text();
-    res.json({
-      status: r.status,
-      ok: r.ok,
-      body: body.substring(0, 500),
-    });
-  } catch (e) {
-    res.status(500).json({
-      error: e.message,
-      stack: e.stack?.substring(0, 500),
-    });
-  }
-});
-
-// Test gửi email qua SMTP
-app.get('/api/test-email', async (req, res) => {
-  try {
-    const result = await notificationService.sendTestEmail();
-    res.json({ ok: true, result });
-  } catch (e) {
-    res.status(500).json({
-      error: e.message,
-      stack: e.stack?.substring(0, 500),
-    });
-  }
-});
-
-// ============================================================
-// END DEBUG ENDPOINTS
-// ============================================================
 
 // Dev-only test DB
 if (!IS_PROD_LIKE) {
@@ -391,7 +304,6 @@ app.get('/uploads/:folder/:filename', (req, res) => {
   try {
     const { folder, filename } = req.params;
     const filePath = path.join(__dirname, '../uploads', folder, filename);
-
     res.sendFile(filePath, (err) => {
       if (err) {
         return res.status(404).json({ message: 'Không tìm thấy file trên server' });
