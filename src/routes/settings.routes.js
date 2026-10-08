@@ -18,6 +18,7 @@ module.exports = (context) => {
     standard_ton: row.standard_ton !== null && row.standard_ton !== undefined
       ? Number(row.standard_ton) : null,
     dies_model: row.dies_model ?? null,
+    die_hole: row.die_hole ?? null, // ✅ THÊM DÒNG NÀY
     updated_at: row.updated_at,
     updated_by: row.updated_by,
   });
@@ -57,7 +58,8 @@ module.exports = (context) => {
         return res.status(403).json({ message: 'Bạn không có quyền sửa cấu hình' });
       }
 
-      const { value, description, press_length_mm, standard_ton, dies_model } = req.body;
+      // ✅ SỬA 1: Thêm die_hole vào destructuring
+      const { value, description, press_length_mm, standard_ton, dies_model, die_hole } = req.body;
       if (value === undefined || value === null || value === '') {
         return res.status(400).json({ message: 'Missing value' });
       }
@@ -69,6 +71,7 @@ module.exports = (context) => {
 
       let result;
       if (existing.rows.length) {
+        // ✅ SỬA 2: Thêm die_hole vào câu UPDATE
         result = await db.query(
           `UPDATE "app_settings"
            SET value = $1,
@@ -76,9 +79,10 @@ module.exports = (context) => {
                press_length_mm = COALESCE($3, press_length_mm),
                standard_ton = COALESCE($4, standard_ton),
                dies_model = COALESCE($5, dies_model),
+               die_hole = COALESCE($6, die_hole),
                updated_at = NOW(),
-               updated_by = $6
-           WHERE key = $7
+               updated_by = $7
+           WHERE key = $8
            RETURNING *`,
           [
             String(value),
@@ -86,16 +90,18 @@ module.exports = (context) => {
             press_length_mm ?? null,
             standard_ton ?? null,
             dies_model ?? null,
+            die_hole ?? null, // ✅ THÊM
             req.user.id,
             req.params.key,
           ]
         );
         await logActivity(req, 'UPDATE_SETTING', null, existing.rows[0], result.rows[0]);
       } else {
+        // ✅ SỬA 3: Thêm die_hole vào câu INSERT
         result = await db.query(
           `INSERT INTO "app_settings" 
-             (key, value, description, press_length_mm, standard_ton, dies_model, updated_by)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
+             (key, value, description, press_length_mm, standard_ton, dies_model, die_hole, updated_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
            RETURNING *`,
           [
             req.params.key,
@@ -104,6 +110,7 @@ module.exports = (context) => {
             press_length_mm ?? null,
             standard_ton ?? null,
             dies_model ?? null,
+            die_hole ?? null, // ✅ THÊM
             req.user.id,
           ]
         );
