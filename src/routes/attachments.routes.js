@@ -37,6 +37,7 @@ module.exports = (context) => {
   };
 
   // ✅ Sửa canAccessWork: query đúng bảng works theo type
+  //    - Dùng cho POST (upload) và GET download — vẫn giữ nguyên logic phân quyền chặt
   const canAccessWork = async (req, workId) => {
     const worksTable = getWorksTable(req);
     const { rows } = await db.query(
@@ -65,13 +66,29 @@ module.exports = (context) => {
     created_at: row.created_at,
   });
 
-  // ✅ GET list — dùng chung bảng work_attachments, chỉ cần canAccessWork đúng
+  // ============================================================
+  // ✅ GET list — MỞ cho tất cả user đã đăng nhập
+  //    Chỉ cần work tồn tại là xem được attachments
+  // ============================================================
   router.get('/api/works/:workId/attachments', authMiddleware, async (req, res) => {
     try {
       const workId = Number(req.params.workId);
-      const access = await canAccessWork(req, workId);   // ✅ Sửa: dùng type
-      if (!access.ok) return res.status(access.status).json({ message: access.message });
+      if (!Number.isFinite(workId)) {
+        return res.status(400).json({ message: 'Invalid workId' });
+      }
 
+      const worksTable = getWorksTable(req);
+
+      // ✅ Chỉ kiểm tra work có tồn tại và chưa bị xóa (KHÔNG kiểm tra quyền user)
+      const { rows: workRows } = await db.query(
+        `SELECT id FROM "${worksTable}" WHERE id = $1 AND is_deleted = false`,
+        [workId]
+      );
+      if (!workRows.length) {
+        return res.status(404).json({ message: 'Work not found' });
+      }
+
+      // ✅ Trả về attachments
       const { rows } = await db.query(
         'SELECT * FROM "work_attachments" WHERE work_id = $1 ORDER BY id DESC',
         [workId],
@@ -82,10 +99,13 @@ module.exports = (context) => {
     }
   });
 
+  // ============================================================
+  // ✅ POST upload — GIỮ NGUYÊN phân quyền chặt
+  // ============================================================
   router.post('/api/works/:workId/attachments', authMiddleware, upload.array('files', 5), async (req, res) => {
     try {
       const workId = Number(req.params.workId);
-      const access = await canAccessWork(req, workId);   // ✅ Sửa: dùng type
+      const access = await canAccessWork(req, workId);
       if (!access.ok) return res.status(access.status).json({ message: access.message });
 
       const category = typeof req.body.category === 'string' && req.body.category.trim() ? req.body.category.trim() : 'general';
@@ -114,6 +134,9 @@ module.exports = (context) => {
     }
   });
 
+  // ============================================================
+  // ✅ GET download — GIỮ NGUYÊN phân quyền chặt (canAccessWork)
+  // ============================================================
   router.get('/api/attachments/:id/download', authMiddleware, async (req, res) => {
     try {
       const id = Number(req.params.id);
@@ -133,6 +156,9 @@ module.exports = (context) => {
     }
   });
 
+  // ============================================================
+  // ✅ DELETE — GIỮ NGUYÊN phân quyền chặt
+  // ============================================================
   router.delete('/api/attachments/:id', authMiddleware, async (req, res) => {
     try {
       const id = Number(req.params.id);
