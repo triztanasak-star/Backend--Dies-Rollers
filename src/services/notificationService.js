@@ -248,7 +248,7 @@ async function notifyRollerChanged(roller, action = 'created') {
   // Dưới đây là các field phổ biến — chỉnh lại nếu cần.
   const model = roller.roller_model || roller.dies_model || roller.model || '—';
   const shellHole = roller.roller_shell_hole ?? roller.shell_hole ?? roller.dies_hole_mm ?? '—';
-  const shellType = roller.roller_shell_type || roller.shell_type || roller.type || '—';
+  const shellType = roller.press_length_mm || roller.roller_shell_type || roller.shell_type || roller.type || '—';
   const rollerCode = roller.roller_code || roller.dies_code || '—';
 
   const facts = [
