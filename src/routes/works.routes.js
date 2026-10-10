@@ -18,6 +18,9 @@ module.exports = (context) => {
     return req.query.type === 'roller' ? 'digital_roller_works' : 'digital_works';
   };
 
+  // ✅ Hàm xác định loại (die hay roller) để gọi đúng notification
+  const getWorkType = (req) => (req.query.type === 'roller' ? 'roller' : 'die');
+
   const mapWork = (row) => ({
     $id: String(row.id),
     id: row.id,
@@ -114,6 +117,19 @@ module.exports = (context) => {
       console.error('[AUTO-CONVERT] Lỗi lookup:', err);
     }
     return null;
+  };
+
+  // ✅ Hàm gọi notification phù hợp (die / roller)
+  const triggerNotification = async (work, action, type) => {
+    try {
+      if (type === 'roller') {
+        await notificationService.notifyRollerChanged(work, action);
+      } else {
+        await notificationService.notifyDieChanged(work, action);
+      }
+    } catch (notifyError) {
+      console.error(`[works-${action}-notify]`, notifyError);
+    }
   };
 
   // ✅ GET /api/works — Hỗ trợ ?type=roller
@@ -214,11 +230,11 @@ module.exports = (context) => {
   // ✅ POST /api/works — Hỗ trợ ?type=roller
   router.post('/api/works', authMiddleware, async (req, res) => {
     try {
-      // ✅ DEBUG: Log ra để biết chính xác req.body có gì
       console.log('--- [works-create] req.body ---', req.body);
       console.log('--- [works-create] req.headers["content-type"] ---', req.headers['content-type']);
 
       const tableName = getTableName(req);
+      const workType = getWorkType(req);
 
       const {
         task_name, description, factory_name, expected_deadline, desired_deadline, priority,
@@ -228,13 +244,13 @@ module.exports = (context) => {
         dies_model, dies_code, symptom, supplier,
         dies_hole_mm, press_length_mm, ld_ratio, dies_life_ton, standard_ton, remaining_tons,
         dies_price_vnd, price_per_ton_vnd, result_cost_per_ton_vnd, line_in_use,
-      } = req.body || {}; // ✅ Fallback về {} nếu req.body undefined
+      } = req.body || {};
 
       const isReviewer = isManagerOrAdmin(req);
 
-      if (!task_name) return res.status(400).json({ 
+      if (!task_name) return res.status(400).json({
         message: 'Missing task_name',
-        received: req.body 
+        received: req.body
       });
       if (priority && !['high', 'medium', 'low'].includes(priority)) {
         return res.status(400).json({ message: 'Invalid priority' });
@@ -285,11 +301,8 @@ module.exports = (context) => {
 
       await logActivity(req, 'CREATE_WORK', rows[0].id, null, rows[0]);
 
-      try {
-        await notificationService.notifyWorkCreated(rows[0]);
-      } catch (notifyError) {
-        console.error('[works-create-notify]', notifyError);
-      }
+      // 🔔 Gửi thông báo Teams + Email (Die hoặc Roller)
+      await triggerNotification(rows[0], 'created', workType);
 
       return res.status(201).json(mapWork(rows[0]));
     } catch (error) {
@@ -304,6 +317,7 @@ module.exports = (context) => {
   router.put('/api/works/:id', authMiddleware, async (req, res) => {
     try {
       const tableName = getTableName(req);
+      const workType = getWorkType(req);
       const id = Number(req.params.id);
 
       const existing = await db.query(
@@ -412,25 +426,8 @@ module.exports = (context) => {
 
       await logActivity(req, 'UPDATE_WORK', id, work, rows[0]);
 
-      const justApproved = work.workflow_status !== 'approved' && rows[0].workflow_status === 'approved';
-      if (justApproved) {
-        try {
-          const recipientIds = [rows[0].assigned_to, rows[0].support_id].filter(
-            (v) => v !== null && v !== undefined,
-          );
-          let recipientEmails = [];
-          if (recipientIds.length > 0) {
-            const { rows: userRows } = await db.query(
-              'SELECT email FROM "users" WHERE id = ANY($1::int[])',
-              [recipientIds],
-            );
-            recipientEmails = userRows.map((u) => u.email).filter(Boolean);
-          }
-          await notificationService.notifyWorkApproved(rows[0], recipientEmails);
-        } catch (notifyError) {
-          console.error('[works-approve-notify]', notifyError);
-        }
-      }
+      // 🔔 Gửi thông báo Teams + Email (Die hoặc Roller) khi có cập nhật
+      await triggerNotification(rows[0], 'updated', workType);
 
       return res.json(mapWork(rows[0]));
     } catch (error) {
@@ -445,6 +442,7 @@ module.exports = (context) => {
   router.patch('/api/works/:id/progress', authMiddleware, async (req, res) => {
     try {
       const tableName = getTableName(req);
+      const workType = getWorkType(req);
       const id = Number(req.params.id);
 
       const existing = await db.query(
@@ -564,19 +562,8 @@ module.exports = (context) => {
 
       await logActivity(req, 'UPDATE_WORK_PROGRESS', id, work, rows[0]);
 
-      const prevWorkflowStatus = work.workflow_status;
-      const newWorkflowStatus = rows[0].workflow_status;
-      if (prevWorkflowStatus !== newWorkflowStatus) {
-        try {
-          if (newWorkflowStatus === 'in_progress') {
-            await notificationService.notifyWorkInProgress(rows[0]);
-          } else if (newWorkflowStatus === 'completed') {
-            await notificationService.notifyWorkCompleted(rows[0]);
-          }
-        } catch (notifyError) {
-          console.error('[works-progress-notify]', notifyError);
-        }
-      }
+      // 🔔 Gửi thông báo khi cập nhật tiến độ (bao gồm cả thay đổi status)
+      await triggerNotification(rows[0], 'updated', workType);
 
       return res.json(mapWork(rows[0]));
     } catch (error) {
