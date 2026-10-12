@@ -88,6 +88,22 @@ module.exports = (context) => {
     }
   });
 
+  // ✅ THÊM MỚI: Route public cho plans (không cần auth) — dùng cho QR scan
+  router.get('/api/works/:workId/plans/public', async (req, res) => {
+    try {
+      const workId = Number(req.params.workId);
+      // Không cần kiểm tra access vì đây là route public
+
+      const { rows } = await db.query(
+        'SELECT * FROM "task_plans" WHERE work_id = $1 ORDER BY step_order ASC, id ASC',
+        [workId],
+      );
+      return res.json({ documents: rows.map(mapPlan) });
+    } catch (error) {
+      return handleServerError(res, error, 'task-plans-public-list');
+    }
+  });
+
   // ✅ Tạo bước plan mới — hỗ trợ type=roller
   router.post('/api/works/:workId/plans', authMiddleware, async (req, res) => {
     try {
