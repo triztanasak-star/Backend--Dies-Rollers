@@ -126,7 +126,11 @@ async function sendTeamsMessage(title, facts, url = null, accentColor = '0076D7'
     return { skipped: true, reason: 'missing-webhook' };
   }
 
-  const appUrl = url || getAppUrl();
+  // ✅ SỬA: Đảm bảo URL luôn có https:// để điện thoại mở được
+  let appUrl = url || getAppUrl();
+  if (appUrl && !/^https?:\/\//i.test(appUrl)) {
+    appUrl = `https://${appUrl}`;
+  }
 
   try {
     const response = await fetch(webhookUrl, {
@@ -209,7 +213,11 @@ async function notifyDieChanged(die, action = 'created') {
     { name: 'LINE:', value: die.line_in_use || '—' },
   ];
 
-  const link = `${appUrl}/die/${die.id}`;
+  // ✅ SỬA: Đảm bảo link có https://
+  let link = `${appUrl}/die/${die.id}`;
+  if (!/^https?:\/\//i.test(link)) {
+    link = `https://${link}`;
+  }
 
   const emailHtml = `
     <h3>${title}</h3>
@@ -244,8 +252,6 @@ async function notifyRollerChanged(roller, action = 'created') {
     ? `🆕 Thêm Roller mới: ${roller.roller_model || roller.dies_model || '—'}`
     : `✏️ Cập nhật Roller: ${roller.roller_model || roller.dies_model || '—'}`;
 
-  // Tùy theo schema DB của bạn, tên field có thể khác.
-  // Dưới đây là các field phổ biến — chỉnh lại nếu cần.
   const model = roller.roller_model || roller.dies_model || roller.model || '—';
   const shellHole = roller.roller_shell_hole ?? roller.shell_hole ?? roller.dies_hole_mm ?? '—';
   const shellType = roller.press_length_mm || roller.roller_shell_type || roller.shell_type || roller.type || '—';
@@ -261,7 +267,11 @@ async function notifyRollerChanged(roller, action = 'created') {
     { name: 'LINE:', value: roller.line_in_use || '—' },
   ];
 
-  const link = `${appUrl}/roller/${roller.id}`;
+  // ✅ SỬA: Đảm bảo link có https://
+  let link = `${appUrl}/roller/${roller.id}`;
+  if (!/^https?:\/\//i.test(link)) {
+    link = `https://${link}`;
+  }
 
   const emailHtml = `
     <h3>${title}</h3>
