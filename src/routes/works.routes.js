@@ -490,7 +490,7 @@ module.exports = (context) => {
       const nextFeedbackComment = isReviewer ? feedback_comment : work.feedback_comment;
 
       let completedAtValue;
-      if (status !== undefined && Number(status) >= 2) {
+      if (status !== undefined && Number(status) >= 2 && Number(status) !== 7) {
         completedAtValue = new Date();
       } else if (completed_at !== undefined) {
         completedAtValue = completed_at;
@@ -498,7 +498,7 @@ module.exports = (context) => {
         completedAtValue = work.completed_at;
       }
 
-      const nextWorkflowStatus = Number(status) >= 2 ? 'completed' : (workflow_status || work.workflow_status);
+      const nextWorkflowStatus = Number(status) >= 2 && Number(status) !== 7 ? 'completed' : (workflow_status || work.workflow_status);
 
       const { rows } = await db.query(
         `UPDATE "${tableName}"

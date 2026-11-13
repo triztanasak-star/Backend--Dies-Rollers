@@ -62,6 +62,7 @@ const STATUS_LABELS = {
   4: 'Hết tuổi thọ',
   5: 'Hư bể',
   6: 'Đang đặt',
+  7: 'Chờ đặt hàng',
 };
 
 function getStatusLabel(status) {

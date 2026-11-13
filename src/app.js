@@ -89,6 +89,8 @@ app.use(cors({
 app.options('/*splat', cors());
 
 // 3. Body parser - ✅ SỬA: Tăng limit để chứa FormData
+// Two 3 MB images expand to about 8 MB when encoded as base64 JSON.
+app.use('/api/spare-parts', express.json({ limit: '10mb' }));
 app.use(express.json({ limit: process.env.JSON_LIMIT || '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true })); // ✅ THÊM DÒNG NÀY
 
@@ -263,6 +265,7 @@ app.use(require('./routes/auth.routes')(context));
 app.use(require('./routes/users.routes')(context));
 app.use(require('./routes/projects.routes')(context));
 app.use(require('./routes/works.routes')(context));
+app.use(require('./routes/spareParts.routes')(context));
 app.use(require('./routes/taskPlans.routes')(context));
 app.use(require('./routes/attachments.routes')(context));
 app.use(require('./routes/settings.routes')(context));
@@ -291,6 +294,9 @@ if (!IS_PROD_LIKE) {
 
 // 6. Global error handler
 app.use((error, _req, res, _next) => {
+  if (error?.type === 'entity.too.large') {
+    return res.status(413).json({ message: 'Dữ liệu quá lớn. Vui lòng giảm kích thước ảnh rồi lưu lại.' });
+  }
   if (error?.message?.includes('CORS')) {
     return res.status(403).json({ message: 'CORS blocked this request origin' });
   }

@@ -1,0 +1,2 @@
+ALTER TABLE spare_parts ADD COLUMN IF NOT EXISTS image_after TEXT NOT NULL DEFAULT '';
+ALTER TABLE spare_parts ADD COLUMN IF NOT EXISTS execution_plans JSONB NOT NULL DEFAULT '[]'::jsonb;
